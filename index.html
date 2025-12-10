@@ -1,586 +1,610 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
-import { Plus, Minus, Trash2, Clipboard, Check, Coffee, Utensils, ChefHat, Soup, IceCream } from 'lucide-react';
-
-// --- Firebase Initialization ---
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-// --- Menu Data ---
-const MENU_DATA = {
-  sets: [
-    { id: 's1', name: '家傳鹹豬肉', price: 300 },
-    { id: 's2', name: '青花椒雞腿排', price: 320 },
-    { id: 's3', name: '味噌雞腿排', price: 320 },
-    { id: 's4', name: '台醃梅花豬', price: 330 },
-    { id: 's5', name: '豆瓣慢燉紅燒牛腩', price: 350 },
-    { id: 's6', name: '酥炸泰式香檸魚', price: 390 },
-    { id: 's7', name: '酸甜薑醬炸豆包', price: 300, note: '奶素' },
-    { id: 's8', name: '鄧媽蔥油拌麵&雞腿排', price: 350 },
-    { id: 's9', name: '豆瓣紅燒牛腩麵', price: 350 },
-  ],
-  soups: [
-    { id: 'soup1', name: '純純的雞湯', price: 120 },
-  ],
-  riceNoodle: [
-    { id: 'rn1', name: '鄧媽雞蔥油乾拌麵', price: 150 },
-    { id: 'rn2', name: '豆瓣紅燒牛腩麵', price: 250 },
-    { id: 'rn3', name: '鄧媽蔥油拌飯', price: 40 },
-    { id: 'rn4', name: '白飯', price: 10 },
-  ],
-  snacks: [
-    { id: 'sn1', name: '青花椒香麻雞翅', price: 160 },
-    { id: 'sn2', name: '我推的脆薯', price: 150 },
-    { id: 'sn3', name: '起司玉米脆片莎莎', price: 80 },
-  ],
-  bbq: [
-    { id: 'bq1', name: '自製烤肉盤(台醃梅花豬)', price: 170 },
-    { id: 'bq2', name: '自製烤肉盤(味噌雞腿排)', price: 170 },
-    { id: 'bq3', name: '自製烤肉盤(家傳鹹豬肉)', price: 170 },
-    { id: 'bq4', name: '自製烤肉盤(青花椒雞腿)', price: 170 },
-  ],
-  drinks: [
-    { id: 'd1', name: '順順野放紅茶', price: 50 },
-    { id: 'd2', name: '蘋果汁', price: 70 },
-    { id: 'd3', name: '神仙堂仙草茶', price: 70 },
-    { id: 'd4', name: '仙草凍奶茶', price: 90 },
-    { id: 'd5', name: '純氣泡水', price: 60 },
-    { id: 'd6', name: '風味氣泡飲', price: 100 },
-    { id: 'd7', name: '醃漬檸檬氣泡飲', price: 100 }, // Assuming price based on context
-    { id: 'd8', name: '櫻島家鮮奶', price: 80 },
-    { id: 'd9', name: '巧克力可可', price: 90 },
-    { id: 'd10', name: '巧克力歐蕾', price: 90 },
-    { id: 'd11', name: '美式咖啡', price: 100 },
-    { id: 'd12', name: '拿鐵咖啡', price: 120 },
-  ],
-  desserts: [
-    { id: 'ds1', name: '小惡魔巴斯克乳酪蛋糕', price: 180 },
-  ]
-};
-
-// --- Helper Components ---
-
-const CategoryButton = ({ active, onClick, icon: Icon, label }) => (
-  <button
-    onClick={onClick}
-    className={`flex items-center gap-2 px-4 py-2 rounded-full whitespace-nowrap transition-colors ${
-      active 
-        ? 'bg-orange-600 text-white shadow-md' 
-        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-    }`}
-  >
-    <Icon size={18} />
-    <span>{label}</span>
-  </button>
-);
-
-const MenuItem = ({ item, onAdd }) => (
-  <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-100 flex justify-between items-center">
-    <div>
-      <h3 className="font-bold text-stone-800">{item.name}</h3>
-      <p className="text-stone-500 text-sm">${item.price}</p>
-      {item.note && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{item.note}</span>}
-    </div>
-    <button 
-      onClick={() => onAdd(item)}
-      className="p-2 bg-stone-100 text-stone-600 rounded-full hover:bg-orange-100 hover:text-orange-600 transition-colors"
-    >
-      <Plus size={20} />
-    </button>
-  </div>
-);
-
-// --- Main Application ---
-
-export default function CornerPlaceOrder() {
-  const [user, setUser] = useState(null);
-  const [userName, setUserName] = useState('');
-  const [activeTab, setActiveTab] = useState('sets');
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-  
-  // Modal States
-  const [selectedSet, setSelectedSet] = useState(null);
-  const [setOptions, setSetOptions] = useState({
-    drink: MENU_DATA.drinks[0], // Default Tea
-    rice: 'white', // white or scallion
-    dessert: false
-  });
-
-  // --- Auth & Data Fetching ---
-  useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>角地方 點餐系統 (AI 智慧版)</title>
     
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        // Load local storage name if exists
-        const savedName = localStorage.getItem('corner_place_username');
-        if (savedName) setUserName(savedName);
-      }
-    });
-    return () => unsubscribeAuth();
-  }, []);
+    <!-- 載入 React 和 Tailwind (需要網路連線) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
 
-  useEffect(() => {
-    if (!user) return;
-    const q = query(
-      collection(db, 'artifacts', appId, 'public', 'data', 'corner_orders'),
-      orderBy('createdAt', 'desc')
-    );
-    
-    const unsubscribeDocs = onSnapshot(q, (snapshot) => {
-      const fetchedOrders = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setOrders(fetchedOrders);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching data:", error);
-      setLoading(false);
-    });
+    <!-- 定義一些樣式 -->
+    <style>
+        body { font-family: "Microsoft JhengHei", "Heiti TC", sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .markdown-body ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; }
+        .markdown-body p { margin-bottom: 0.5em; }
+        @keyframes sparkle {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-sparkle { animation: sparkle 2s infinite; }
+    </style>
+</head>
+<body class="bg-stone-50">
+    <div id="root"></div>
 
-    return () => unsubscribeDocs();
-  }, [user]);
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const apiKey = ""; // API Key will be injected by the environment
 
-  // --- Actions ---
+        // --- Gemini API Helper ---
+        const callGemini = async (prompt) => {
+            if (!apiKey) {
+                alert("API Key 尚未設定，無法使用 AI 功能。");
+                return "無法連線到 AI 服務。";
+            }
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }]
+                    })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    console.error("Gemini API Error:", data.error);
+                    throw new Error(data.error.message);
+                }
+                return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 思考中斷，請重試。";
+            } catch (error) {
+                console.error("Gemini Fetch Error:", error);
+                return "連線錯誤，請檢查網路或稍後再試。";
+            }
+        };
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    if (userName.trim()) {
-      localStorage.setItem('corner_place_username', userName);
-      // Force refresh/re-render isn't needed as state updates
-    }
-  };
+        // --- 圖示組件 ---
+        const Icons = {
+            Plus: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>,
+            Trash2: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>,
+            Clipboard: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>,
+            Check: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+            Utensils: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>,
+            Soup: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z"/><path d="M7 21v-8a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v8"/><path d="M19.5 12a9 9 0 1 1-18 0"/></svg>,
+            ChefHat: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z"/><line x1="6" x2="18" y1="17" y2="17"/></svg>,
+            Coffee: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><line x1="6" x2="6" y1="1" y2="4"/><line x1="10" x2="10" y1="1" y2="4"/><line x1="14" x2="14" y1="1" y2="4"/></svg>,
+            IceCream: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 11 4.08 10.35a1 1 0 0 0 1.84 0L17 11"/><path d="M17 7A5 5 0 0 0 7 7"/><path d="M17 7a2 2 0 0 1 0 4H7a2 2 0 0 1 0-4"/></svg>,
+            Sparkles: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>,
+            Bot: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+        };
 
-  const submitOrder = async (orderData) => {
-    if (!user || !userName) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'corner_orders'), {
-        ...orderData,
-        userName,
-        userId: user.uid,
-        createdAt: serverTimestamp()
-      });
-    } catch (e) {
-      console.error("Error adding order", e);
-    }
-  };
+        // --- 菜單資料 (精簡結構以利 Token 傳輸) ---
+        const MENU_DATA = {
+            sets: [
+                { id: 's1', name: '家傳鹹豬肉', price: 300 },
+                { id: 's2', name: '青花椒雞腿排', price: 320 },
+                { id: 's3', name: '味噌雞腿排', price: 320 },
+                { id: 's4', name: '台醃梅花豬', price: 330 },
+                { id: 's5', name: '豆瓣慢燉紅燒牛腩', price: 350 },
+                { id: 's6', name: '酥炸泰式香檸魚', price: 390 },
+                { id: 's7', name: '酸甜薑醬炸豆包', price: 300, note: '奶素' },
+                { id: 's8', name: '鄧媽蔥油拌麵&雞腿排', price: 350 },
+                { id: 's9', name: '豆瓣紅燒牛腩麵', price: 350 },
+            ],
+            soups: [
+                { id: 'soup1', name: '純純的雞湯', price: 120 },
+            ],
+            riceNoodle: [
+                { id: 'rn1', name: '鄧媽雞蔥油乾拌麵', price: 150 },
+                { id: 'rn2', name: '豆瓣紅燒牛腩麵', price: 250 },
+                { id: 'rn3', name: '鄧媽蔥油拌飯', price: 40 },
+                { id: 'rn4', name: '白飯', price: 10 },
+            ],
+            snacks: [
+                { id: 'sn1', name: '青花椒香麻雞翅', price: 160 },
+                { id: 'sn2', name: '我推的脆薯', price: 150 },
+                { id: 'sn3', name: '起司玉米脆片莎莎', price: 80 },
+            ],
+            bbq: [
+                { id: 'bq1', name: '自製烤肉盤(台醃梅花豬)', price: 170 },
+                { id: 'bq2', name: '自製烤肉盤(味噌雞腿排)', price: 170 },
+                { id: 'bq3', name: '自製烤肉盤(家傳鹹豬肉)', price: 170 },
+                { id: 'bq4', name: '自製烤肉盤(青花椒雞腿)', price: 170 },
+            ],
+            drinks: [
+                { id: 'd1', name: '順順野放紅茶', price: 50 },
+                { id: 'd2', name: '蘋果汁', price: 70 },
+                { id: 'd3', name: '神仙堂仙草茶', price: 70 },
+                { id: 'd4', name: '仙草凍奶茶', price: 90 },
+                { id: 'd5', name: '純氣泡水', price: 60 },
+                { id: 'd6', name: '風味氣泡飲', price: 100 },
+                { id: 'd7', name: '醃漬檸檬氣泡飲', price: 100 },
+                { id: 'd8', name: '櫻島家鮮奶', price: 80 },
+                { id: 'd9', name: '巧克力可可', price: 90 },
+                { id: 'd10', name: '巧克力歐蕾', price: 90 },
+                { id: 'd11', name: '美式咖啡', price: 100 },
+                { id: 'd12', name: '拿鐵咖啡', price: 120 },
+            ],
+            desserts: [
+                { id: 'ds1', name: '小惡魔巴斯克乳酪蛋糕', price: 180 },
+            ]
+        };
 
-  const deleteOrder = async (orderId) => {
-    try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'corner_orders', orderId));
-    } catch (e) {
-      console.error("Error deleting order", e);
-    }
-  };
-
-  // --- Set Meal Logic ---
-
-  const openSetModal = (item) => {
-    setSelectedSet(item);
-    setSetOptions({
-      drink: MENU_DATA.drinks[0], // Default: Black Tea
-      rice: 'white',
-      dessert: false
-    });
-  };
-
-  const calculateSetTotal = () => {
-    if (!selectedSet) return 0;
-    let total = selectedSet.price;
-    
-    // Drink logic: Default includes 20 dollar discount equivalent. 
-    // Menu says "換飲料折抵20元" (Change drink discount 20).
-    // The base set price includes a basic tea. 
-    // Let's assume standard tea is included. If they switch, we take (New Drink Price - 20).
-    // Wait, usually set includes a basic drink. If I pick a $100 drink, I pay +80 (100-20).
-    // If I pick the default Black Tea ($50), it is included.
-    
-    if (setOptions.drink.id !== 'd1') { // If not default Black Tea
-       total += (setOptions.drink.price - 20);
-    }
-
-    if (setOptions.rice === 'scallion') total += 20;
-    if (setOptions.dessert) total += 120; // Menu says "套餐+120可加購"
-    
-    return total;
-  };
-
-  const handleAddSet = () => {
-    const total = calculateSetTotal();
-    const descriptionParts = [selectedSet.name];
-    
-    if (setOptions.rice === 'scallion') descriptionParts.push('蔥油拌飯');
-    
-    // Drink description
-    if (setOptions.drink.id !== 'd1') {
-       descriptionParts.push(setOptions.drink.name);
-    } else {
-       descriptionParts.push('紅茶');
-    }
-
-    if (setOptions.dessert) descriptionParts.push('巴斯克蛋糕');
-
-    const orderPayload = {
-      type: 'set',
-      name: selectedSet.name,
-      description: descriptionParts.join(' + '),
-      price: total,
-      details: {
-        main: selectedSet.name,
-        rice: setOptions.rice,
-        drink: setOptions.drink.name,
-        dessert: setOptions.dessert
-      }
-    };
-    submitOrder(orderPayload);
-    setSelectedSet(null);
-  };
-
-  // --- A La Carte Logic ---
-  const handleAddSimple = (item, type = 'single') => {
-    submitOrder({
-      type: type, // 'single', 'soup', 'snack', etc.
-      name: item.name,
-      price: item.price
-    });
-  };
-
-  // --- Summary Generator ---
-  const generateSummaryText = () => {
-    // Group by logic to match Image 2
-    const sets = orders.filter(o => o.type === 'set');
-    const singles = orders.filter(o => ['single', 'soup', 'riceNoodle', 'snack', 'drink', 'dessert'].includes(o.type));
-    const bbqs = orders.filter(o => o.type === 'bbq'); // Or however we classify BBQ
-
-    let text = `角地方點餐清單 (${new Date().toLocaleDateString()})\n\n`;
-
-    if (sets.length > 0) {
-      text += `套餐：\n`;
-      sets.forEach(o => {
-        text += `${o.description} ${o.price}\n`;
-      });
-      text += `\n`;
-    }
-
-    if (singles.length > 0) {
-      text += `單點：\n`;
-      singles.forEach(o => {
-        text += `${o.name}\n`;
-      });
-      text += `\n`;
-    }
-
-    if (bbqs.length > 0) {
-      text += `自製烤肉盤：\n`;
-      bbqs.forEach(o => {
-        text += `${o.name}\n`;
-      });
-    }
-
-    // Calculate Grand Total
-    const total = orders.reduce((sum, o) => sum + o.price, 0);
-    text += `\n總金額：$${total}`;
-
-    return text;
-  };
-
-  const [copySuccess, setCopySuccess] = useState(false);
-  const copyToClipboard = () => {
-    const text = generateSummaryText();
-    navigator.clipboard.writeText(text).then(() => {
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    });
-  };
-
-  // --- Render ---
-
-  if (!userName && !localStorage.getItem('corner_place_username')) {
-    return (
-      <div className="min-h-screen bg-orange-50 flex items-center justify-center p-4 font-sans">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full border border-orange-100">
-          <div className="text-center mb-6">
-            <ChefHat className="w-16 h-16 text-orange-600 mx-auto mb-2" />
-            <h1 className="text-2xl font-bold text-stone-800">角地方 點餐系統</h1>
-            <p className="text-stone-500">輸入您的名字開始點餐</p>
-          </div>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <input
-              type="text"
-              placeholder="您的名字 (例如: 吳主任)"
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
-              className="w-full p-4 border border-stone-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-lg"
-              required
-            />
+        // --- 輔助組件 ---
+        const CategoryButton = ({ active, onClick, icon: Icon, label }) => (
             <button
-              type="submit"
-              className="w-full bg-orange-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-orange-700 transition shadow-lg shadow-orange-200"
+                onClick={onClick}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full whitespace-nowrap transition-colors ${
+                active 
+                    ? 'bg-orange-600 text-white shadow-md' 
+                    : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                }`}
             >
-              進入點餐
+                <Icon />
+                <span>{label}</span>
             </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
+        );
 
-  return (
-    <div className="min-h-screen bg-stone-50 font-sans pb-32">
-      {/* Header */}
-      <header className="bg-white sticky top-0 z-10 shadow-sm border-b border-stone-100">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="bg-orange-600 text-white p-2 rounded-lg">
-              <Utensils size={20} />
-            </div>
-            <div>
-              <h1 className="font-bold text-lg text-stone-800">角地方</h1>
-              <p className="text-xs text-stone-500">你好, {userName}</p>
-            </div>
-          </div>
-          <button 
-            onClick={() => {
-              localStorage.removeItem('corner_place_username');
-              setUserName('');
-            }}
-            className="text-xs text-stone-400 hover:text-stone-600"
-          >
-            登出
-          </button>
-        </div>
-        
-        {/* Category Tabs */}
-        <div className="max-w-3xl mx-auto px-4 py-2 flex gap-2 overflow-x-auto no-scrollbar pb-3">
-          <CategoryButton active={activeTab === 'sets'} onClick={() => setActiveTab('sets')} icon={Utensils} label="做伙呷套餐" />
-          <CategoryButton active={activeTab === 'soup_rice'} onClick={() => setActiveTab('soup_rice')} icon={Soup} label="湯品/飯麵" />
-          <CategoryButton active={activeTab === 'snacks'} onClick={() => setActiveTab('snacks')} icon={ChefHat} label="炸物/小點" />
-          <CategoryButton active={activeTab === 'bbq'} onClick={() => setActiveTab('bbq')} icon={ChefHat} label="烤肉盤" />
-          <CategoryButton active={activeTab === 'drinks'} onClick={() => setActiveTab('drinks')} icon={Coffee} label="冷熱飲" />
-          <CategoryButton active={activeTab === 'desserts'} onClick={() => setActiveTab('desserts')} icon={IceCream} label="甜點" />
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="max-w-3xl mx-auto p-4 space-y-4">
-        
-        {/* Render Items based on Tab */}
-        {activeTab === 'sets' && (
-          <div className="grid gap-3">
-            {MENU_DATA.sets.map(item => (
-              <MenuItem key={item.id} item={item} onAdd={() => openSetModal(item)} />
-            ))}
-          </div>
-        )}
-
-        {activeTab === 'soup_rice' && (
-          <div className="space-y-6">
-             <div>
-                <h3 className="text-sm font-bold text-stone-400 uppercase mb-2 ml-1">湯品</h3>
-                <div className="grid gap-3">
-                  {MENU_DATA.soups.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'soup')} />)}
-                </div>
-             </div>
-             <div>
-                <h3 className="text-sm font-bold text-stone-400 uppercase mb-2 ml-1">飯 & 麵</h3>
-                <div className="grid gap-3">
-                  {MENU_DATA.riceNoodle.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'riceNoodle')} />)}
-                </div>
-             </div>
-          </div>
-        )}
-
-        {activeTab === 'snacks' && (
-           <div className="grid gap-3">
-             {MENU_DATA.snacks.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'snack')} />)}
-           </div>
-        )}
-
-        {activeTab === 'bbq' && (
-           <div className="grid gap-3">
-             {MENU_DATA.bbq.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'bbq')} />)}
-           </div>
-        )}
-
-        {activeTab === 'drinks' && (
-           <div className="grid gap-3">
-             {MENU_DATA.drinks.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'drink')} />)}
-           </div>
-        )}
-
-        {activeTab === 'desserts' && (
-           <div className="grid gap-3">
-             {MENU_DATA.desserts.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'dessert')} />)}
-           </div>
-        )}
-      </main>
-
-      {/* Set Meal Customization Modal */}
-      {selectedSet && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl animate-in slide-in-from-bottom-10">
-            <h2 className="text-xl font-bold mb-1">{selectedSet.name}</h2>
-            <p className="text-stone-500 mb-4">基本價格 ${selectedSet.price} (含紅茶)</p>
-            
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-              {/* Rice Option */}
-              <div className="bg-stone-50 p-3 rounded-lg">
-                <label className="text-sm font-bold text-stone-700 block mb-2">主食選擇</label>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => setSetOptions({...setOptions, rice: 'white'})}
-                    className={`flex-1 py-2 rounded-md text-sm border ${setOptions.rice === 'white' ? 'bg-white border-orange-500 text-orange-600 ring-1 ring-orange-500' : 'bg-transparent border-stone-200 text-stone-600'}`}
-                  >
-                    白飯
-                  </button>
-                  <button 
-                    onClick={() => setSetOptions({...setOptions, rice: 'scallion'})}
-                    className={`flex-1 py-2 rounded-md text-sm border ${setOptions.rice === 'scallion' ? 'bg-white border-orange-500 text-orange-600 ring-1 ring-orange-500' : 'bg-transparent border-stone-200 text-stone-600'}`}
-                  >
-                    蔥油拌飯 (+$20)
-                  </button>
-                </div>
-              </div>
-
-              {/* Drink Option */}
-              <div className="bg-stone-50 p-3 rounded-lg">
-                <label className="text-sm font-bold text-stone-700 block mb-2">飲料選擇 (換購折$20)</label>
-                <select 
-                  className="w-full p-2 border border-stone-200 rounded-md bg-white text-stone-700"
-                  value={setOptions.drink.id}
-                  onChange={(e) => setSetOptions({...setOptions, drink: MENU_DATA.drinks.find(d => d.id === e.target.value)})}
-                >
-                  {MENU_DATA.drinks.map(d => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} {d.id === 'd1' ? '(附餐)' : `(+${Math.max(0, d.price - 20)})`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Dessert Option */}
-              <div className="bg-stone-50 p-3 rounded-lg flex items-center justify-between">
+        const MenuItem = ({ item, onAdd }) => (
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-100 flex justify-between items-center">
                 <div>
-                  <label className="text-sm font-bold text-stone-700">加購甜點</label>
-                  <p className="text-xs text-stone-500">巴斯克乳酪蛋糕</p>
+                <h3 className="font-bold text-stone-800">{item.name}</h3>
+                <p className="text-stone-500 text-sm">${item.price}</p>
+                {item.note && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{item.note}</span>}
                 </div>
                 <button 
-                  onClick={() => setSetOptions({...setOptions, dessert: !setOptions.dessert})}
-                  className={`w-12 h-6 rounded-full transition-colors relative ${setOptions.dessert ? 'bg-orange-500' : 'bg-stone-300'}`}
+                onClick={() => onAdd(item)}
+                className="p-2 bg-stone-100 text-stone-600 rounded-full hover:bg-orange-100 hover:text-orange-600 transition-colors"
                 >
-                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${setOptions.dessert ? 'left-7' : 'left-1'}`} />
+                <Icons.Plus />
                 </button>
-              </div>
             </div>
+        );
 
-            <div className="mt-6 flex items-center justify-between pt-4 border-t border-stone-100">
-              <div className="text-lg font-bold text-stone-800">${calculateSetTotal()}</div>
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setSelectedSet(null)}
-                  className="px-4 py-2 text-stone-500 font-medium"
-                >
-                  取消
-                </button>
-                <button 
-                  onClick={handleAddSet}
-                  className="px-6 py-2 bg-stone-800 text-white rounded-xl font-bold hover:bg-black transition-transform active:scale-95"
-                >
-                  加入清單
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Summary Footer / Bottom Sheet */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-stone-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-40 max-w-3xl mx-auto">
-         <details className="group">
-            <summary className="list-none cursor-pointer p-4 flex justify-between items-center hover:bg-stone-50 transition-colors">
-              <div className="flex items-center gap-2">
-                <div className="bg-stone-800 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
-                  {orders.length}
-                </div>
-                <span className="font-bold text-stone-800">已點清單</span>
-                <span className="text-xs text-stone-400 hidden sm:inline">(點擊展開/收合)</span>
-              </div>
-              <div className="font-bold text-orange-600 text-lg">
-                ${orders.reduce((sum, o) => sum + o.price, 0)}
-              </div>
-            </summary>
+        // --- 主程式 ---
+        function App() {
+            const [userName, setUserName] = useState('');
+            const [isLoggedIn, setIsLoggedIn] = useState(false);
+            const [activeTab, setActiveTab] = useState('sets');
+            const [orders, setOrders] = useState([]);
             
-            <div className="p-4 max-h-[50vh] overflow-y-auto bg-stone-50 border-t border-stone-100">
-              {loading ? (
-                <div className="text-center py-4 text-stone-400">載入中...</div>
-              ) : orders.length === 0 ? (
-                <div className="text-center py-8 text-stone-400">尚未有點餐項目</div>
-              ) : (
-                <div className="space-y-4">
-                  {/* Order List Display */}
-                  {orders.map((order) => (
-                    <div key={order.id} className="flex justify-between items-start bg-white p-3 rounded-lg shadow-sm">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-stone-700">{order.userName}</span>
-                          <span className="text-xs text-stone-400">{new Date(order.createdAt?.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+            // Modal States
+            const [selectedSet, setSelectedSet] = useState(null);
+            const [setOptions, setSetOptions] = useState({
+                drink: MENU_DATA.drinks[0], 
+                rice: 'white', 
+                dessert: false
+            });
+            
+            // AI 相關 State
+            const [showAIModal, setShowAIModal] = useState(false);
+            const [aiLoading, setAiLoading] = useState(false);
+            const [aiResult, setAiResult] = useState('');
+            const [aiMode, setAiMode] = useState('recommend'); // 'recommend' or 'analyze'
+            
+            // 複製成功提示
+            const [copySuccess, setCopySuccess] = useState(false);
+
+            useEffect(() => {
+                const storedName = localStorage.getItem('corner_user_name');
+                if (storedName) setUserName(storedName);
+                
+                const storedOrders = localStorage.getItem('corner_offline_orders');
+                if (storedOrders) {
+                    try { setOrders(JSON.parse(storedOrders)); } catch(e) {}
+                }
+            }, []);
+
+            const saveOrders = (newOrders) => {
+                setOrders(newOrders);
+                localStorage.setItem('corner_offline_orders', JSON.stringify(newOrders));
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (userName.trim()) {
+                    localStorage.setItem('corner_user_name', userName);
+                    setIsLoggedIn(true);
+                }
+            };
+
+            const handleLogout = () => {
+                setIsLoggedIn(false);
+                setUserName('');
+            };
+
+            const clearAllOrders = () => {
+                if(confirm('確定要清空所有人的訂單嗎？')) {
+                    saveOrders([]);
+                    setAiResult(''); // Clear AI cache
+                }
+            };
+
+            const submitOrder = (orderData) => {
+                const newOrder = {
+                    ...orderData,
+                    id: Date.now().toString() + Math.random().toString().slice(2,5),
+                    userName: userName,
+                    createdAt: new Date().toISOString()
+                };
+                saveOrders([...orders, newOrder]);
+            };
+
+            const deleteOrder = (orderId) => {
+                saveOrders(orders.filter(o => o.id !== orderId));
+            };
+
+            // --- AI 功能邏輯 ---
+            
+            const handleAIRecommend = async (mood) => {
+                setAiMode('recommend');
+                setShowAIModal(true);
+                setAiLoading(true);
+                setAiResult('');
+                
+                const menuContext = JSON.stringify(MENU_DATA);
+                const prompt = `
+                    你是一位「角地方料理廚房」的親切店員，非常懂吃。
+                    以下是我們的菜單資料 (JSON): ${menuContext}。
+                    
+                    客人現在的心情或需求是：「${mood}」。
+                    
+                    請從菜單中為他推薦 **1種套餐**，或者 **1個主食搭配飲料/點心** 的組合。
+                    請用繁體中文回答，語氣要活潑溫暖，並簡短說明為什麼推薦這個組合（例如口感、特色）。
+                    回答格式不用太正式，像朋友一樣推薦即可。
+                `;
+
+                const result = await callGemini(prompt);
+                setAiResult(result);
+                setAiLoading(false);
+            };
+
+            const handleAIAnalyze = async () => {
+                if (orders.length === 0) {
+                    alert("目前還沒有人點餐喔！");
+                    return;
+                }
+                setAiMode('analyze');
+                setShowAIModal(true);
+                setAiLoading(true);
+                setAiResult('');
+
+                const orderList = orders.map(o => `${o.userName}點了${o.name}`).join('、');
+                const prompt = `
+                    以下是目前一群客人的點餐清單：${orderList}。
+                    
+                    請根據大家點的食物風格（例如炸物多、健康多、甜點多、或是都很貴），
+                    來分析一下這個團體今天的「聚餐運勢」或「團體氣氛」。
+                    
+                    請發揮創意，給出一段幽默風趣的點評，或是類似「今日幸運指南」的短文。
+                    請用繁體中文，約 100-150 字左右。
+                `;
+
+                const result = await callGemini(prompt);
+                setAiResult(result);
+                setAiLoading(false);
+            };
+
+            // --- 套餐與一般點餐邏輯 ---
+            const openSetModal = (item) => {
+                setSelectedSet(item);
+                setSetOptions({
+                    drink: MENU_DATA.drinks[0],
+                    rice: 'white',
+                    dessert: false
+                });
+            };
+
+            const calculateSetTotal = () => {
+                if (!selectedSet) return 0;
+                let total = selectedSet.price;
+                if (setOptions.drink.id !== 'd1') total += (setOptions.drink.price - 20);
+                if (setOptions.rice === 'scallion') total += 20;
+                if (setOptions.dessert) total += 120;
+                return total;
+            };
+
+            const handleAddSet = () => {
+                const total = calculateSetTotal();
+                const descriptionParts = [selectedSet.name];
+                if (setOptions.rice === 'scallion') descriptionParts.push('蔥油拌飯');
+                if (setOptions.drink.id !== 'd1') descriptionParts.push(setOptions.drink.name);
+                else descriptionParts.push('紅茶');
+                if (setOptions.dessert) descriptionParts.push('巴斯克蛋糕');
+
+                submitOrder({
+                    type: 'set',
+                    name: selectedSet.name,
+                    description: descriptionParts.join(' + '),
+                    price: total,
+                });
+                setSelectedSet(null);
+            };
+
+            const handleAddSimple = (item, type = 'single') => {
+                submitOrder({
+                    type: type,
+                    name: item.name,
+                    price: item.price
+                });
+            };
+
+            // --- 產生彙整文字 ---
+            const generateSummaryText = () => {
+                const sets = orders.filter(o => o.type === 'set');
+                const singles = orders.filter(o => ['single', 'soup', 'riceNoodle', 'snack', 'drink', 'dessert'].includes(o.type));
+                const bbqs = orders.filter(o => o.type === 'bbq');
+
+                let text = `角地方點餐清單 (${new Date().toLocaleDateString()})\n\n`;
+
+                if (sets.length > 0) {
+                    text += `套餐：\n`;
+                    sets.forEach(o => text += `${o.description} ${o.price}\n`);
+                    text += `\n`;
+                }
+                if (singles.length > 0) {
+                    text += `單點：\n`;
+                    singles.forEach(o => text += `${o.name}\n`);
+                    text += `\n`;
+                }
+                if (bbqs.length > 0) {
+                    text += `自製烤肉盤：\n`;
+                    bbqs.forEach(o => text += `${o.name}\n`);
+                }
+                const total = orders.reduce((sum, o) => sum + o.price, 0);
+                text += `\n總金額：$${total}`;
+                
+                // Add AI analysis if exists in modal (optional, but keep simple text only here)
+                return text;
+            };
+
+            const copyToClipboard = () => {
+                const text = generateSummaryText();
+                navigator.clipboard.writeText(text).then(() => {
+                    setCopySuccess(true);
+                    setTimeout(() => setCopySuccess(false), 2000);
+                });
+            };
+
+            // --- 登入畫面 ---
+            if (!isLoggedIn) {
+                return (
+                    <div className="min-h-screen bg-orange-50 flex items-center justify-center p-4 font-sans">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full border border-orange-100 relative overflow-hidden">
+                            <div className="absolute top-0 right-0 p-4 opacity-10">
+                                <Icons.Sparkles />
+                            </div>
+                            <div className="text-center mb-6">
+                                <div className="text-orange-600 mb-2 flex justify-center"><Icons.ChefHat /></div>
+                                <h1 className="text-2xl font-bold text-stone-800">角地方 點餐系統</h1>
+                                <p className="text-stone-500 font-bold text-sm">(AI 智慧單機版)</p>
+                            </div>
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <input
+                                    type="text"
+                                    placeholder="您的名字 (例如: 吳主任)"
+                                    value={userName}
+                                    onChange={(e) => setUserName(e.target.value)}
+                                    className="w-full p-4 border border-stone-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-lg"
+                                    required
+                                />
+                                <button type="submit" className="w-full bg-orange-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-orange-700 transition shadow-lg shadow-orange-200">
+                                    開始點餐
+                                </button>
+                            </form>
+                            
+                            {orders.length > 0 && (
+                                <div className="mt-8 pt-6 border-t border-stone-100">
+                                    <p className="text-center text-stone-500 mb-2 text-sm">這台電腦上已有 {orders.length} 筆訂單</p>
+                                    <div className="flex gap-2 justify-center">
+                                        <button onClick={clearAllOrders} className="text-red-400 text-sm hover:underline flex items-center gap-1">
+                                            <Icons.Trash2 /> 清空重來
+                                        </button>
+                                        <button onClick={() => {setUserName('查看清單模式'); setIsLoggedIn(true);}} className="text-stone-400 text-sm hover:underline">
+                                            直接查看清單
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                        <p className="text-sm text-stone-600 mt-1">
-                          {order.type === 'set' ? order.description : order.name}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <span className="font-bold text-stone-800">${order.price}</span>
-                        {user && user.uid === order.userId && (
-                          <button 
-                            onClick={() => deleteOrder(order.id)}
-                            className="text-red-400 hover:text-red-600 p-1"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
-                      </div>
                     </div>
-                  ))}
+                );
+            }
 
-                  {/* Export Actions */}
-                  <div className="pt-4 mt-4 border-t border-stone-200">
-                    <button
-                      onClick={copyToClipboard}
-                      className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors ${
-                        copySuccess 
-                          ? 'bg-green-600 text-white' 
-                          : 'bg-stone-800 text-white hover:bg-black'
-                      }`}
-                    >
-                      {copySuccess ? <Check size={20} /> : <Clipboard size={20} />}
-                      {copySuccess ? '已複製格式' : '複製彙整清單 (格式如圖1)'}
-                    </button>
-                    <p className="text-xs text-center text-stone-400 mt-2">
-                      點擊後可直接貼上至 LINE 或 Email
-                    </p>
-                  </div>
+            // --- 點餐主畫面 ---
+            return (
+                <div className="min-h-screen bg-stone-50 font-sans pb-32">
+                    {/* Header */}
+                    <header className="bg-white sticky top-0 z-10 shadow-sm border-b border-stone-100">
+                        <div className="max-w-3xl mx-auto px-4 py-4">
+                            <div className="flex justify-between items-center mb-4">
+                                <div className="flex items-center gap-2">
+                                    <div className="bg-orange-600 text-white p-2 rounded-lg"><Icons.Utensils /></div>
+                                    <div>
+                                        <h1 className="font-bold text-lg text-stone-800">角地方</h1>
+                                        <p className="text-xs text-stone-500">Hi, {userName}</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                     <button 
+                                        onClick={() => setShowAIModal(true) || setAiMode('recommend') || setAiResult('')}
+                                        className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full hover:bg-indigo-200 flex items-center gap-1 transition-colors border border-indigo-200"
+                                    >
+                                        <Icons.Sparkles size={14} /> 不知道吃什麼?
+                                    </button>
+                                    <button onClick={handleLogout} className="text-xs text-stone-400 hover:text-stone-600 border border-stone-200 px-2 py-1 rounded">
+                                        登出
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                <CategoryButton active={activeTab === 'sets'} onClick={() => setActiveTab('sets')} icon={Icons.Utensils} label="做伙呷套餐" />
+                                <CategoryButton active={activeTab === 'soup_rice'} onClick={() => setActiveTab('soup_rice')} icon={Icons.Soup} label="湯品/飯麵" />
+                                <CategoryButton active={activeTab === 'snacks'} onClick={() => setActiveTab('snacks')} icon={Icons.ChefHat} label="炸物/小點" />
+                                <CategoryButton active={activeTab === 'bbq'} onClick={() => setActiveTab('bbq')} icon={Icons.ChefHat} label="烤肉盤" />
+                                <CategoryButton active={activeTab === 'drinks'} onClick={() => setActiveTab('drinks')} icon={Icons.Coffee} label="冷熱飲" />
+                                <CategoryButton active={activeTab === 'desserts'} onClick={() => setActiveTab('desserts')} icon={Icons.IceCream} label="甜點" />
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="max-w-3xl mx-auto p-4 space-y-4">
+                        {activeTab === 'sets' && (
+                            <div className="grid gap-3">{MENU_DATA.sets.map(item => <MenuItem key={item.id} item={item} onAdd={() => openSetModal(item)} />)}</div>
+                        )}
+                        {activeTab === 'soup_rice' && (
+                            <div className="space-y-6">
+                                <div><h3 className="text-sm font-bold text-stone-400 uppercase mb-2 ml-1">湯品</h3><div className="grid gap-3">{MENU_DATA.soups.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'soup')} />)}</div></div>
+                                <div><h3 className="text-sm font-bold text-stone-400 uppercase mb-2 ml-1">飯 & 麵</h3><div className="grid gap-3">{MENU_DATA.riceNoodle.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'riceNoodle')} />)}</div></div>
+                            </div>
+                        )}
+                        {activeTab === 'snacks' && <div className="grid gap-3">{MENU_DATA.snacks.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'snack')} />)}</div>}
+                        {activeTab === 'bbq' && <div className="grid gap-3">{MENU_DATA.bbq.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'bbq')} />)}</div>}
+                        {activeTab === 'drinks' && <div className="grid gap-3">{MENU_DATA.drinks.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'drink')} />)}</div>}
+                        {activeTab === 'desserts' && <div className="grid gap-3">{MENU_DATA.desserts.map(item => <MenuItem key={item.id} item={item} onAdd={(i) => handleAddSimple(i, 'dessert')} />)}</div>}
+                    </main>
+
+                    {/* AI Feature Modal */}
+                    {showAIModal && (
+                        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
+                                <button onClick={() => setShowAIModal(false)} className="absolute top-4 right-4 text-stone-400 hover:text-stone-600">✕</button>
+                                
+                                <div className="flex items-center gap-2 mb-4">
+                                    <div className="bg-indigo-100 text-indigo-600 p-2 rounded-lg"><Icons.Sparkles /></div>
+                                    <h2 className="text-xl font-bold text-stone-800">
+                                        {aiMode === 'recommend' ? 'AI 隨堂點餐顧問' : 'AI 餐點運勢分析'}
+                                    </h2>
+                                </div>
+
+                                {aiMode === 'recommend' && !aiResult && !aiLoading && (
+                                    <div className="space-y-3">
+                                        <p className="text-stone-600 mb-2">請問您現在的心情是？</p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {['超級餓！想吃飽', '想吃清淡一點', '心情好想犒賞自己', '壓力大想吃炸物', '隨便，給我想法', '想吃甜甜的'].map(mood => (
+                                                <button 
+                                                    key={mood}
+                                                    onClick={() => handleAIRecommend(mood)}
+                                                    className="p-3 bg-stone-50 hover:bg-indigo-50 border border-stone-200 hover:border-indigo-200 rounded-xl text-sm text-stone-700 hover:text-indigo-700 transition-colors text-left"
+                                                >
+                                                    {mood}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {aiLoading && (
+                                    <div className="py-8 text-center">
+                                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-indigo-200 border-t-indigo-600 mb-4"></div>
+                                        <p className="text-stone-500 animate-pulse">AI 正在讀取菜單思考中...</p>
+                                    </div>
+                                )}
+
+                                {aiResult && (
+                                    <div className="animate-in fade-in zoom-in duration-300">
+                                        <div className="bg-indigo-50 p-4 rounded-xl text-stone-700 text-sm leading-relaxed whitespace-pre-line mb-4 border border-indigo-100">
+                                            {aiResult}
+                                        </div>
+                                        <button 
+                                            onClick={() => setShowAIModal(false)}
+                                            className="w-full py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-black transition-colors"
+                                        >
+                                            太棒了，謝謝！
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Set Meal Customization Modal */}
+                    {selectedSet && (
+                        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl">
+                                <h2 className="text-xl font-bold mb-1">{selectedSet.name}</h2>
+                                <p className="text-stone-500 mb-4">基本價格 ${selectedSet.price} (含紅茶)</p>
+                                <div className="space-y-4 max-h-[60vh] overflow-y-auto">
+                                    <div className="bg-stone-50 p-3 rounded-lg">
+                                        <label className="text-sm font-bold text-stone-700 block mb-2">主食選擇</label>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setSetOptions({...setOptions, rice: 'white'})} className={`flex-1 py-2 rounded-md text-sm border ${setOptions.rice === 'white' ? 'bg-white border-orange-500 text-orange-600 ring-1 ring-orange-500' : 'bg-transparent border-stone-200 text-stone-600'}`}>白飯</button>
+                                            <button onClick={() => setSetOptions({...setOptions, rice: 'scallion'})} className={`flex-1 py-2 rounded-md text-sm border ${setOptions.rice === 'scallion' ? 'bg-white border-orange-500 text-orange-600 ring-1 ring-orange-500' : 'bg-transparent border-stone-200 text-stone-600'}`}>蔥油拌飯 (+$20)</button>
+                                        </div>
+                                    </div>
+                                    <div className="bg-stone-50 p-3 rounded-lg">
+                                        <label className="text-sm font-bold text-stone-700 block mb-2">飲料選擇</label>
+                                        <select className="w-full p-2 border border-stone-200 rounded-md bg-white text-stone-700" value={setOptions.drink.id} onChange={(e) => setSetOptions({...setOptions, drink: MENU_DATA.drinks.find(d => d.id === e.target.value)})}>
+                                            {MENU_DATA.drinks.map(d => <option key={d.id} value={d.id}>{d.name} {d.id === 'd1' ? '(附餐)' : `(+${Math.max(0, d.price - 20)})`}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="bg-stone-50 p-3 rounded-lg flex items-center justify-between">
+                                        <div><label className="text-sm font-bold text-stone-700">加購甜點</label><p className="text-xs text-stone-500">巴斯克乳酪蛋糕</p></div>
+                                        <button onClick={() => setSetOptions({...setOptions, dessert: !setOptions.dessert})} className={`w-12 h-6 rounded-full transition-colors relative ${setOptions.dessert ? 'bg-orange-500' : 'bg-stone-300'}`}><div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${setOptions.dessert ? 'left-7' : 'left-1'}`} /></button>
+                                    </div>
+                                </div>
+                                <div className="mt-6 flex items-center justify-between pt-4 border-t border-stone-100">
+                                    <div className="text-lg font-bold text-stone-800">${calculateSetTotal()}</div>
+                                    <div className="flex gap-3">
+                                        <button onClick={() => setSelectedSet(null)} className="px-4 py-2 text-stone-500 font-medium">取消</button>
+                                        <button onClick={handleAddSet} className="px-6 py-2 bg-stone-800 text-white rounded-xl font-bold hover:bg-black">加入清單</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Summary Footer */}
+                    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-stone-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-40 max-w-3xl mx-auto">
+                        <details className="group">
+                            <summary className="list-none cursor-pointer p-4 flex justify-between items-center hover:bg-stone-50 transition-colors">
+                                <div className="flex items-center gap-2">
+                                    <div className="bg-stone-800 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">{orders.length}</div>
+                                    <span className="font-bold text-stone-800">已點清單</span>
+                                    <span className="text-xs text-stone-400 hidden sm:inline">(點擊展開/收合)</span>
+                                </div>
+                                <div className="font-bold text-orange-600 text-lg">${orders.reduce((sum, o) => sum + o.price, 0)}</div>
+                            </summary>
+                            <div className="p-4 max-h-[60vh] overflow-y-auto bg-stone-50 border-t border-stone-100">
+                                {orders.length === 0 ? <div className="text-center py-8 text-stone-400">尚未有點餐項目</div> : (
+                                    <div className="space-y-4">
+                                         {/* AI Analyze Button */}
+                                         <button 
+                                            onClick={handleAIAnalyze}
+                                            className="w-full py-2 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-lg text-sm font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+                                        >
+                                            <Icons.Bot /> ✨ 分析今日餐點運勢
+                                        </button>
+
+                                        {orders.map((order) => (
+                                            <div key={order.id} className="flex justify-between items-start bg-white p-3 rounded-lg shadow-sm">
+                                                <div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-stone-700">{order.userName}</span>
+                                                    </div>
+                                                    <p className="text-sm text-stone-600 mt-1">{order.type === 'set' ? order.description : order.name}</p>
+                                                </div>
+                                                <div className="flex flex-col items-end gap-2">
+                                                    <span className="font-bold text-stone-800">${order.price}</span>
+                                                    <button onClick={() => deleteOrder(order.id)} className="text-red-400 hover:text-red-600 p-1"><Icons.Trash2 /></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div className="pt-4 mt-4 border-t border-stone-200">
+                                            <button onClick={copyToClipboard} className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors ${copySuccess ? 'bg-green-600 text-white' : 'bg-stone-800 text-white hover:bg-black'}`}>
+                                                {copySuccess ? <Icons.Check /> : <Icons.Clipboard />}
+                                                {copySuccess ? '已複製格式' : '複製彙整清單'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </details>
+                    </div>
                 </div>
-              )}
-            </div>
-         </details>
-      </div>
+            );
+        }
 
-    </div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
